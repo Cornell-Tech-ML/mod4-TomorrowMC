@@ -13,11 +13,18 @@ if TYPE_CHECKING:
     from .scalar import Scalar, ScalarLike
 
 
-def wrap_tuple(x: float | Tuple[float, ...]) -> Tuple[float, ...]:
+def wrap_tuple(x):  # type: ignore
     """Turn a possible value into a tuple"""
     if isinstance(x, tuple):
         return x
     return (x,)
+
+
+def unwrap_tuple(x):  # type: ignore
+    """Turn a singleton tuple into a value"""
+    if len(x) == 1:
+        return x[0]
+    return x
 
 
 class ScalarFunction:
@@ -37,7 +44,7 @@ class ScalarFunction:
         return cls.forward(ctx, *inps)  # type: ignore
 
     @classmethod
-    def apply(cls, *vals: ScalarLike) -> Scalar:
+    def apply(cls, *vals: "ScalarLike") -> Scalar:
         raw_vals = []
         scalars = []
         for v in vals:
@@ -66,7 +73,7 @@ class Add(ScalarFunction):
 
     @staticmethod
     def forward(ctx: Context, a: float, b: float) -> float:
-        return a + b
+        return operators.add(a, b)
 
     @staticmethod
     def backward(ctx: Context, d_output: float) -> Tuple[float, ...]:
@@ -90,3 +97,126 @@ class Log(ScalarFunction):
 # To implement.
 
 
+class Mul(ScalarFunction):
+    """Multiplication function"""
+
+    @staticmethod
+    def forward(ctx: Context, a: float, b: float) -> float:
+        # TODO: Implement for Task 1.2.
+        ctx.save_for_backward(a, b)
+        return operators.mul(a, b)
+
+    @staticmethod
+    def backward(ctx: Context, d_output: float) -> Tuple[float, float]:
+        # TODO: Implement for Task 1.4.
+        (a, b) = ctx.saved_values
+        return operators.mul(b, d_output), operators.mul(a, d_output)
+
+
+class Inv(ScalarFunction):
+    """Inverse function"""
+
+    @staticmethod
+    def forward(ctx: Context, a: float) -> float:
+        # TODO: Implement for Task 1.2.
+        ctx.save_for_backward(a)
+        return 1 / a
+
+    @staticmethod
+    def backward(ctx: Context, d_output: float) -> float:
+        # TODO: Implement for Task 1.4.
+        (a,) = ctx.saved_values
+        return operators.inv_back(a, d_output)
+
+
+class Neg(ScalarFunction):
+    """Negation function"""
+
+    @staticmethod
+    def forward(ctx: Context, a: float) -> float:
+        # TODO: Implement for Task 1.2.
+        return operators.neg(a)
+
+    @staticmethod
+    def backward(ctx: Context, d_output: float) -> float:
+        # TODO: Implement for Task 1.4.
+        return operators.neg(d_output)
+
+
+class Sigmoid(ScalarFunction):
+    """Sigmoid function"""
+
+    @staticmethod
+    def forward(ctx: Context, a: float) -> float:
+        # TODO: Implement for Task 1.2.
+        sigmoid_val: float = operators.sigmoid(a)
+        ctx.save_for_backward(sigmoid_val)
+        return sigmoid_val
+
+    @staticmethod
+    def backward(ctx: Context, d_output: float) -> float:
+        # TODO: Implement for Task 1.4.
+        (sigmoid_val,) = ctx.saved_values
+        return operators.mul(
+            operators.mul(sigmoid_val, operators.add(1, (-sigmoid_val))), d_output
+        )
+
+
+class ReLU(ScalarFunction):
+    """ReLU function"""
+
+    @staticmethod
+    def forward(ctx: Context, a: float) -> float:
+        # TODO: Implement for Task 1.2.
+        ctx.save_for_backward(a)
+        return operators.relu(a)
+
+    @staticmethod
+    def backward(ctx: Context, d_output: float) -> float:
+        # TODO: Implement for Task 1.4.
+        (a,) = ctx.saved_values
+        return operators.relu_back(a, d_output)
+
+
+class Exp(ScalarFunction):
+    """Exp function"""
+
+    @staticmethod
+    def forward(ctx: Context, a: float) -> float:
+        # TODO: Implement for Task 1.2.
+        ctx.save_for_backward(a)
+        return operators.exp(a)
+
+    @staticmethod
+    def backward(ctx: Context, d_output: float) -> float:
+        # TODO: Implement for Task 1.4.
+        (a,) = ctx.saved_values
+        return operators.mul(operators.exp(a), d_output)
+
+
+class LT(ScalarFunction):
+    """Less-than function $f(x) =$ 1.0 if x is less than y else 0.0"""
+
+    @staticmethod
+    def forward(ctx: Context, a: float, b: float) -> float:
+        # TODO: Implement for Task 1.2.
+        return operators.lt(a, b)
+
+    @staticmethod
+    def backward(ctx: Context, d_output: float) -> Tuple[float, float]:
+        # TODO: Implement for Task 1.4.
+        return 0.0, 0.0
+
+
+class EQ(ScalarFunction):
+    """Equal function $f(x) =$ 1.0 if x is equal to y else 0.0"""
+
+    @staticmethod
+    def forward(ctx: Context, a: float, b: float) -> float:
+        # TODO: Implement for Task 1.2.
+        return operators.eq(a, b)
+
+    @staticmethod
+    def backward(ctx: Context, d_output: float) -> Tuple[float, float]:
+        # TODO: Implement for Task 1.4.
+        return 0.0, 0.0

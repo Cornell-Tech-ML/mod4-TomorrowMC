@@ -10,8 +10,6 @@ import numpy as np
 from . import operators
 from .autodiff import Context, Variable, backpropagate
 from .tensor_data import TensorData
-
-# Comment these out if not yet implemented
 from .tensor_functions import (
     EQ,
     LT,
@@ -107,6 +105,31 @@ class Tensor:
         """
         return self.contiguous()._tensor._storage.reshape(self.shape)
 
+    # Properties
+    @property
+    def shape(self) -> UserShape:
+        """Returns
+        shape of the tensor
+
+        """
+        return self._tensor.shape
+
+    @property
+    def size(self) -> int:
+        """Returns
+        int : size of the tensor
+
+        """
+        return self._tensor.size
+
+    @property
+    def dims(self) -> int:
+        """Returns
+        int : dimensionality of the tensor
+
+        """
+        return self._tensor.dims
+
     def _ensure_tensor(self, b: TensorLike) -> Tensor:
         """Turns a python number into a tensor with the same backend."""
         if isinstance(b, (int, float)):
@@ -116,11 +139,94 @@ class Tensor:
             c = b
         return c
 
+    # Functions
+    def __add__(self, b: TensorLike) -> Tensor:
+        return Add.apply(self, self._ensure_tensor(b))
+
+    def __sub__(self, b: TensorLike) -> Tensor:
+        return Add.apply(self, -self._ensure_tensor(b))
+
+    def __mul__(self, b: TensorLike) -> Tensor:
+        return Mul.apply(self, self._ensure_tensor(b))
+
+    def __truediv__(self, b: TensorLike) -> Tensor:
+        return Mul.apply(self, Inv.apply(self._ensure_tensor(b)))
+
+    def __rtruediv__(self, b: TensorLike) -> Tensor:
+        return Mul.apply(self._ensure_tensor(b), Inv.apply(self))
+
+    def __matmul__(self, b: Tensor) -> Tensor:
+        """Not used until Module 3"""
+        return MatMul.apply(self, b)
+
+    def __lt__(self, b: TensorLike) -> Tensor:
+        return LT.apply(self, self._ensure_tensor(b))
+
+    def __eq__(self, b: TensorLike) -> Tensor:  # type: ignore[override]
+        return EQ.apply(self, self._ensure_tensor(b))
+
+    def __gt__(self, b: TensorLike) -> Tensor:
+        return LT.apply(self._ensure_tensor(b), self)
+
+    def __neg__(self) -> Tensor:
+        return Neg.apply(self)
+
+    def __radd__(self, b: TensorLike) -> Tensor:
+        return self + b
+
+    def __rmul__(self, b: TensorLike) -> Tensor:
+        return self * b
+
+    def all(self, dim: Optional[int] = None) -> Tensor:
+        if dim is None:
+            return All.apply(self.view(self.size), self._ensure_tensor(0))
+        else:
+            return All.apply(self, self._ensure_tensor(dim))
+
+    def is_close(self, y: Tensor) -> Tensor:
+        return IsClose.apply(self, y)
+
+    def sigmoid(self) -> Tensor:
+        return Sigmoid.apply(self)
+
+    def relu(self) -> Tensor:
+        return ReLU.apply(self)
+
+    def log(self) -> Tensor:
+        return Log.apply(self)
+
+    def exp(self) -> Tensor:
+        return Exp.apply(self)
+
     def item(self) -> float:
-        """Convert a 1-element tensor to a float"""
         assert self.size == 1
         x: float = self._tensor._storage[0]
         return x
+
+    def zeros(shape, backend):
+        return Tensor.make([0.0] * int(operators.prod(shape)), shape, backend=backend)
+
+    def sum(self, dim: Optional[int] = None) -> Tensor:
+        """Compute the sum over dimension `dim`"""
+        if dim is None:
+            return Sum.apply(self.contiguous().view(self.size), self._ensure_tensor(0))
+        else:
+            return Sum.apply(self, self._ensure_tensor(dim))
+
+    def mean(self, dim: Optional[int] = None) -> Tensor:
+        """Compute the mean over dimension `dim`"""
+        if dim is not None:
+            return self.sum(dim) / self.shape[dim]
+        else:
+            return self.sum() / self.size
+
+    def permute(self, *order: int) -> Tensor:
+        """Permute tensor dimensions to *order"""
+        return Permute.apply(self, tensor(list(order)))
+
+    def view(self, *shape: int) -> Tensor:
+        """Change the shape of the tensor to a new shape with the same size"""
+        return View.apply(self, tensor(list(shape)))
 
     def contiguous(self) -> Tensor:
         """Return a contiguous tensor with the same data"""
@@ -162,11 +268,11 @@ class Tensor:
         is a different size than the input of `forward`.
 
 
-        Args:
-        ----
+        Parameters
+        ----------
             other : backward tensor (must broadcast with self)
 
-        Returns:
+        Returns
         -------
             Expanded version of `other` with the right derivatives
 
@@ -207,11 +313,9 @@ class Tensor:
         return out
 
     def tuple(self) -> Tuple[Storage, Shape, Strides]:
-        """Get the tensor data info as a tuple."""
         return self._tensor.tuple()
 
     def detach(self) -> Tensor:
-        """Detach from backprop"""
         return Tensor(self._tensor, backend=self.backend)
 
     # Variable elements for backprop
@@ -228,9 +332,7 @@ class Tensor:
         assert self.is_leaf(), "Only leaf variables can have derivatives."
         if self.grad is None:
             self.grad = Tensor.make(
-                [0.0] * int(operators.prod(self.shape)),
-                self.shape,
-                backend=self.backend,
+                [0] * int(operators.prod(self.shape)), self.shape, backend=self.backend
             )
         self.grad += x
 
@@ -265,23 +367,9 @@ class Tensor:
             grad_output = Tensor.make([1.0], (1,), backend=self.backend)
         backpropagate(self, grad_output)
 
-    def __truediv__(self, b: TensorLike) -> Tensor:
-        return Mul.apply(self, Inv.apply(self._ensure_tensor(b)))
+    def zero_grad_(self) -> None:  # pragma: no cover
+        """Reset the derivative on this variable."""
+        self.grad = None
 
-    def __rtruediv__(self, b: TensorLike) -> Tensor:
-        return Mul.apply(self._ensure_tensor(b), Inv.apply(self))
 
-    def __matmul__(self, b: Tensor) -> Tensor:
-        """Not used until Module 3"""
-        return MatMul.apply(self, b)
 
-    @property
-    def shape(self) -> UserShape:
-        """Returns
-        shape of the tensor
-
-        """
-        return self._tensor.shape
-
-    # Functions
-    raise NotImplementedError("Need to include this file from past assignment.")

@@ -91,7 +91,19 @@ def _tensor_conv1d(
     s2 = weight_strides
 
     # TODO: Implement for Task 4.1.
-    raise NotImplementedError("Need to implement for Task 4.1")
+    for i in prange(out_size):
+        out_index = np.zeros(MAX_DIMS, np.int16)
+        to_index(i, out_shape, out_index)
+        o = index_to_position(out_index, out_strides)
+        b, oc, w = out_index[:3]
+        for dw in range(kw):
+            iw = w - dw if reverse else w + dw
+            if not (0 <= iw < width):
+                continue
+            for ic in range(in_channels):
+                term1 = input[s1[0]*b + s1[1]*ic + s1[2]*iw]
+                term2 = weight[s2[0]*oc + s2[1]*ic + s2[2]*dw]
+                out[o] += term1 * term2
 
 
 tensor_conv1d = njit(_tensor_conv1d, parallel=True)
@@ -219,9 +231,28 @@ def _tensor_conv2d(
     s10, s11, s12, s13 = s1[0], s1[1], s1[2], s1[3]
     s20, s21, s22, s23 = s2[0], s2[1], s2[2], s2[3]
 
-    # TODO: Implement for Task 4.2.
-    raise NotImplementedError("Need to implement for Task 4.2")
-
+    for i in prange(out_size):
+        out_index = np.zeros(MAX_DIMS, np.int16)
+        to_index(i, out_shape, out_index)
+        o = index_to_position(out_index, out_strides)
+        b, oc, h, w = out_index[:4]
+        acc = 0.0
+        order = -1 if reverse else 1
+        for dh in prange(kh):
+            ih = h + dh * order
+            if ih < 0 or ih >= height:
+                continue
+            for dw in prange(kw):
+                iw = w + dw * order
+                if iw < 0 or iw >= width:
+                    continue
+                inner1 = s10 * b + s12 * ih + s13 * iw
+                inner2 = s20 * oc + s22 * dh + s23 * dw
+                for ic in prange(in_channels):
+                    acc += input[inner1] * weight[inner2]
+                    inner1 += s11
+                    inner2 += s21
+        out[o] = acc
 
 tensor_conv2d = njit(_tensor_conv2d, parallel=True, fastmath=True)
 

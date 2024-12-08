@@ -31,25 +31,60 @@ class Module:
 
     def train(self) -> None:
         """Set the mode of this module and all descendent modules to `train`."""
-        raise NotImplementedError("Need to include this file from past assignment.")
+
+        # TODO: Implement for Task 0.4.
+        def set_train_recursive(module: Module) -> None:
+            module.training = True
+            for child in module.modules():
+                set_train_recursive(child)
+
+        set_train_recursive(self)
 
     def eval(self) -> None:
         """Set the mode of this module and all descendent modules to `eval`."""
-        raise NotImplementedError("Need to include this file from past assignment.")
+
+        # TODO: Implement for Task 0.4.
+        def set_eval_recursive(module: Module) -> None:
+            module.training = False
+            for child in module.modules():
+                set_eval_recursive(child)
+
+        set_eval_recursive(self)
 
     def named_parameters(self) -> Sequence[Tuple[str, Parameter]]:
         """Collect all the parameters of this module and its descendents.
+
 
         Returns
         -------
             The name and `Parameter` of each ancestor parameter.
 
         """
-        raise NotImplementedError("Need to include this file from past assignment.")
+        # TODO: Implement for Task 0.4.
+        params: Dict[str, Parameter] = {}
+
+        def recursive_add_children_params(mod_name: str, module: Module) -> None:
+            keyname = mod_name + "." if mod_name else ""
+
+            for param_name in module._parameters:
+                params[keyname + param_name] = module._parameters[param_name]
+            for module_name in module._modules:
+                recursive_add_children_params(
+                    keyname + module_name, module._modules[module_name]
+                )
+
+        recursive_add_children_params(mod_name="", module=self)
+        params_set: Sequence[Tuple[str, Parameter]] = list(
+            (x, y) for (x, y) in zip(list(params.keys()), list(params.values()))
+        )
+
+        return params_set
 
     def parameters(self) -> Sequence[Parameter]:
         """Enumerate over all the parameters of this module and its descendents."""
-        raise NotImplementedError("Need to include this file from past assignment.")
+        # TODO: Implement for Task 0.4.
+        params: Sequence[Parameter] = list(y for (x, y) in self.named_parameters())
+        return params
 
     def add_parameter(self, k: str, v: Any) -> Parameter:
         """Manually add a parameter. Useful helper for scalar parameters.
@@ -116,9 +151,9 @@ class Module:
 
 
 class Parameter:
-    """A Parameter is a special container stored in a `Module`.
+    """A Parameter is a special container stored in a :class:`Module`.
 
-    It is designed to hold a `Variable`, but we allow it to hold
+    It is designed to hold a :class:`Variable`, but we allow it to hold
     any value for testing.
     """
 
