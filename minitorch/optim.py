@@ -1,6 +1,7 @@
 from typing import Sequence
 
 from .module import Parameter
+from .scalar import Scalar
 
 
 class Optimizer:
@@ -14,6 +15,7 @@ class SGD(Optimizer):
         self.lr = lr
 
     def zero_grad(self) -> None:
+        """Zero out the gradients for the parameters"""
         for p in self.parameters:
             if p.value is None:
                 continue
@@ -25,9 +27,13 @@ class SGD(Optimizer):
                     p.value.grad = None
 
     def step(self) -> None:
+        """Update the parameters based on the gradients"""
         for p in self.parameters:
             if p.value is None:
                 continue
+            if hasattr(p.value, "derivative"):
+                if p.value.derivative is not None:
+                    p.update(Scalar(p.value.data - self.lr * p.value.derivative))
             elif hasattr(p.value, "grad"):
                 if p.value.grad is not None:
                     p.update(p.value - self.lr * p.value.grad)

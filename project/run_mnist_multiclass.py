@@ -2,7 +2,8 @@ from mnist import MNIST
 
 import minitorch
 
-mndata = MNIST("project/data/")
+mndata = MNIST("/Users/yifei.hu/NoUpdate/Python/MLE/mod4-TomorrowMC/project/data/")
+
 images, labels = mndata.load_training()
 
 BACKEND = minitorch.TensorBackend(minitorch.FastOps)
@@ -41,8 +42,7 @@ class Conv2d(minitorch.Module):
         self.bias = RParam(out_channels, 1, 1)
 
     def forward(self, input):
-        # TODO: Implement for Task 4.5.
-        raise NotImplementedError("Need to implement for Task 4.5")
+        return minitorch.conv2d(input, self.weights.value) + self.bias.value
 
 
 class Network(minitorch.Module):
@@ -63,16 +63,31 @@ class Network(minitorch.Module):
     def __init__(self):
         super().__init__()
 
-        # For vis
         self.mid = None
         self.out = None
 
-        # TODO: Implement for Task 4.5.
-        raise NotImplementedError("Need to implement for Task 4.5")
+        self.conv1 = Conv2d(1, 4, 3, 3)
+        self.conv2 = Conv2d(4, 8, 3, 3)
+
+        self.linear1 = Linear(392, 64)
+        self.linear2 = Linear(64, C)
 
     def forward(self, x):
-        # TODO: Implement for Task 4.5.
-        raise NotImplementedError("Need to implement for Task 4.5")
+        self.mid = self.conv1.forward(x)
+        self.mid = self.mid.relu()
+
+        self.out = self.conv2.forward(self.mid)
+        self.out = self.out.relu()
+
+        pooled = minitorch.maxpool2d(self.out, (4, 4))
+        flattened = pooled.view(pooled.shape[0], 392)
+
+        hidden = minitorch.dropout(self.linear1.forward(flattened).relu(), 0.25, not self.training)
+
+        logits = self.linear2.forward(hidden)
+
+        return minitorch.logsoftmax(logits, dim=1)
+
 
 
 def make_mnist(start, stop):

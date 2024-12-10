@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar, Any
 
-import numpy as np
-from numba import njit, prange
+import numpy as np  # type: ignore
+from numba import prange  # type: ignore
+from numba import njit as _njit  # type: ignore
 
 from .tensor_data import (
     MAX_DIMS,
@@ -25,9 +26,17 @@ if TYPE_CHECKING:
 # This code will JIT compile fast versions your tensor_data functions.
 # If you get an error, read the docs for NUMBA as to what is allowed
 # in these functions.
-to_index = njit(inline="always")(to_index)
-index_to_position = njit(inline="always")(index_to_position)
-broadcast_index = njit(inline="always")(broadcast_index)
+Fn = TypeVar("Fn")
+
+
+def njit(fn: Fn, **kwargs: Any) -> Fn:
+    """Decorator to JIT compile a function."""
+    return _njit(inline="always", **kwargs)(fn)  # type: ignore
+
+
+to_index = njit(to_index)
+index_to_position = njit(index_to_position)
+broadcast_index = njit(broadcast_index)
 
 
 class FastOps(TensorOps):
@@ -35,7 +44,7 @@ class FastOps(TensorOps):
     def map(fn: Callable[[float], float]) -> MapProto:
         """See `tensor_ops.py`"""
         # This line JIT compiles your tensor_map
-        f = tensor_map(njit()(fn))
+        f = tensor_map(njit(fn))
 
         def ret(a: Tensor, out: Optional[Tensor] = None) -> Tensor:
             if out is None:
@@ -48,7 +57,7 @@ class FastOps(TensorOps):
     @staticmethod
     def zip(fn: Callable[[float, float], float]) -> Callable[[Tensor, Tensor], Tensor]:
         """See `tensor_ops.py`"""
-        f = tensor_zip(njit()(fn))
+        f = tensor_zip(njit(fn))
 
         def ret(a: Tensor, b: Tensor) -> Tensor:
             c_shape = shape_broadcast(a.shape, b.shape)
@@ -63,7 +72,7 @@ class FastOps(TensorOps):
         fn: Callable[[float, float], float], start: float = 0.0
     ) -> Callable[[Tensor, int], Tensor]:
         """See `tensor_ops.py`"""
-        f = tensor_reduce(njit()(fn))
+        f = tensor_reduce(njit(fn))
 
         def ret(a: Tensor, dim: int) -> Tensor:
             out_shape = list(a.shape)
@@ -134,21 +143,15 @@ class FastOps(TensorOps):
 def tensor_map(
     fn: Callable[[float], float],
 ) -> Callable[[Storage, Shape, Strides, Storage, Shape, Strides], None]:
-    """NUMBA low_level tensor_map function. See `tensor_ops.py` for description.
-
-    Optimizations:
-
-    * Main loop in parallel
-    * All indices use numpy buffers
-    * When `out` and `in` are stride-aligned, avoid indexing
+    """Maps a function across elements in a tensor.
 
     Args:
     ----
-        fn: function mappings floats-to-floats to apply.
+        fn: Function to apply to each element
 
     Returns:
     -------
-        Tensor map function.
+        Compiled function that applies fn to each element in the tensor
 
     """
 
@@ -160,26 +163,28 @@ def tensor_map(
         in_shape: Shape,
         in_strides: Strides,
     ) -> None:
-        aligned = (
-            len(out_strides) == len(in_strides)
-            and (out_strides == in_strides).all()
-            and (out_shape == in_shape).all()
-        )
+        size = 1
+        for i in range(len(out_shape)):
+            size *= out_shape[i]
 
-        if aligned:
-            for elem_idx in prange(len(out)):
-                out[elem_idx] = fn(in_storage[elem_idx])
-        else:
-            for elem_idx in prange(len(out)):
-                out_pos = np.empty(MAX_DIMS, np.int32)
-                in_pos = np.empty(MAX_DIMS, np.int32)
-                to_index(elem_idx, out_shape, out_pos)
-                broadcast_index(out_pos, out_shape, in_shape, in_pos)
-                out[index_to_position(out_pos, out_strides)] = fn(
-                    in_storage[index_to_position(in_pos, in_strides)]
-                )
+        # Main parallel loop
+        for i in prange(size):
+            # Calculate output index
+            out_index = np.empty(MAX_DIMS, np.int32)
+            to_index(i, out_shape, out_index)
 
-    return njit(parallel=True)(_map)
+            # Calculate input index
+            in_index = np.empty(MAX_DIMS, np.int32)
+            broadcast_index(out_index, out_shape, in_shape, in_index)
+
+            # Get positions
+            out_pos = index_to_position(out_index, out_strides)
+            in_pos = index_to_position(in_index, in_strides)
+
+            # Apply function
+            out[out_pos] = fn(in_storage[in_pos])
+
+    return njit(_map, parallel=True)
 
 
 def tensor_zip(
@@ -187,22 +192,15 @@ def tensor_zip(
 ) -> Callable[
     [Storage, Shape, Strides, Storage, Shape, Strides, Storage, Shape, Strides], None
 ]:
-    """NUMBA higher-order tensor zip function. See `tensor_ops.py` for description.
-
-
-    Optimizations:
-
-    * Main loop in parallel
-    * All indices use numpy buffers
-    * When `out`, `a`, `b` are stride-aligned, avoid indexing
+    """Applies a function to pairs of elements from two tensors.
 
     Args:
     ----
-        fn: function maps two floats to float to apply.
+        fn: Function to apply to pairs of elements
 
     Returns:
     -------
-        Tensor zip function.
+        Compiled function that applies fn to pairs of elements from the input tensors
 
     """
 
@@ -217,50 +215,44 @@ def tensor_zip(
         b_shape: Shape,
         b_strides: Strides,
     ) -> None:
-        aligned_strides = (
-            len(out_strides) == len(a_strides) == len(b_strides)
-            and (out_strides == a_strides).all()
-            and (out_strides == b_strides).all()
-            and (out_shape == a_shape).all()
-            and (out_shape == b_shape).all()
-        )
+        size = 1
+        for i in range(len(out_shape)):
+            size *= out_shape[i]
 
-        if aligned_strides:
-            for pos in prange(len(out)):
-                out[pos] = fn(a_storage[pos], b_storage[pos])
-        else:
-            for pos in prange(len(out)):
-                out_coords = np.empty(MAX_DIMS, np.int32)
-                a_coords = np.empty(MAX_DIMS, np.int32)
-                b_coords = np.empty(MAX_DIMS, np.int32)
-                to_index(pos, out_shape, out_coords)
-                broadcast_index(out_coords, out_shape, a_shape, a_coords)
-                broadcast_index(out_coords, out_shape, b_shape, b_coords)
-                a_val = a_storage[index_to_position(a_coords, a_strides)]
-                b_val = b_storage[index_to_position(b_coords, b_strides)]
-                out[index_to_position(out_coords, out_strides)] = fn(a_val, b_val)
+        # Main parallel loop
+        for i in prange(size):
+            out_index = np.empty(MAX_DIMS, np.int32)
+            to_index(i, out_shape, out_index)
 
-    return njit(parallel=True)(_zip)
+            # Handle broadcasting for both inputs
+            a_index = np.empty(MAX_DIMS, np.int32)
+            b_index = np.empty(MAX_DIMS, np.int32)
+            broadcast_index(out_index, out_shape, a_shape, a_index)
+            broadcast_index(out_index, out_shape, b_shape, b_index)
+
+            # Get positions
+            out_pos = index_to_position(out_index, out_strides)
+            a_pos = index_to_position(a_index, a_strides)
+            b_pos = index_to_position(b_index, b_strides)
+
+            # Apply function
+            out[out_pos] = fn(a_storage[a_pos], b_storage[b_pos])
+
+    return njit(_zip, parallel=True)
 
 
 def tensor_reduce(
     fn: Callable[[float, float], float],
 ) -> Callable[[Storage, Shape, Strides, Storage, Shape, Strides, int], None]:
-    """NUMBA higher-order tensor reduce function. See `tensor_ops.py` for description.
-
-    Optimizations:
-
-    * Main loop in parallel
-    * All indices use numpy buffers
-    * Inner-loop should not call any functions or write non-local variables
+    """Reduces a tensor along a dimension by applying a function to pairs of elements.
 
     Args:
     ----
-        fn: reduction function mapping two floats to float.
+        fn: Function to apply in the reduction operation
 
     Returns:
     -------
-        Tensor reduce function
+        Compiled function that performs the reduction operation on the input tensor
 
     """
 
@@ -273,23 +265,35 @@ def tensor_reduce(
         a_strides: Strides,
         reduce_dim: int,
     ) -> None:
-        reduction_size = a_shape[reduce_dim]
-        reduction_stride = a_strides[reduce_dim]
+        size = 1
+        for i in range(len(out_shape)):
+            size *= out_shape[i]
+        reduce_size = a_shape[reduce_dim]
 
-        for base_idx in prange(len(out)):
-            position = np.empty(MAX_DIMS, np.int32)
-            to_index(base_idx, out_shape, position)
-            out_pos = index_to_position(position, out_strides)
-            current = out[out_pos]
-            a_pos = index_to_position(position, a_strides)
+        for i in prange(size):
+            # Get output index
+            out_index = np.empty(MAX_DIMS, np.int32)
+            to_index(i, out_shape, out_index)
+            out_pos = index_to_position(out_index, out_strides)
 
-            for offset in range(reduction_size):
-                current = fn(current, a_storage[a_pos])
-                a_pos += reduction_stride
+            # Set up input index
+            a_index = np.empty(MAX_DIMS, np.int32)
+            for j in range(len(out_shape)):
+                a_index[j] = out_index[j]
 
-            out[out_pos] = current
+            # First value
+            a_index[reduce_dim] = 0
+            acc = a_storage[index_to_position(a_index, a_strides)]
 
-    return njit(parallel=True)(_reduce)
+            # Reduce remaining values
+            for j in range(1, reduce_size):
+                a_index[reduce_dim] = j
+                a_pos = index_to_position(a_index, a_strides)
+                acc = fn(acc, a_storage[a_pos])
+
+            out[out_pos] = acc
+
+    return njit(_reduce, parallel=True)
 
 
 def _tensor_matrix_multiply(
@@ -303,63 +307,37 @@ def _tensor_matrix_multiply(
     b_shape: Shape,
     b_strides: Strides,
 ) -> None:
-    """NUMBA tensor matrix multiply function.
+    # Get dimensions
+    n_batches = np.int32(np.maximum(a_shape[0], b_shape[0]))
+    n_rows = a_shape[1]
+    n_cols = b_shape[2]
+    n_inner = a_shape[2]
 
-    Should work for any tensor shapes that broadcast as long as
+    # Get batch strides, handling broadcasting
+    a_batch_stride = a_strides[0] if a_shape[0] > 1 else 0
+    b_batch_stride = b_strides[0] if b_shape[0] > 1 else 0
 
-    ```
-    assert a_shape[-1] == b_shape[-2]
-    ```
+    # Parallel loop over batches
+    for batch in prange(n_batches):
+        for i in range(n_rows):
+            for j in range(n_cols):
+                acc = 0.0
 
-    Optimizations:
+                # Calculate base positions for this output element
+                out_pos = (
+                    batch * out_strides[0] + i * out_strides[1] + j * out_strides[2]
+                )
+                a_base = batch * a_batch_stride + i * a_strides[1]
+                b_base = batch * b_batch_stride + j * b_strides[2]
 
-    * Outer loop in parallel
-    * No index buffers or function calls
-    * Inner loop should have no global writes, 1 multiply.
+                # Inner product
+                for k in range(n_inner):
+                    a_pos = a_base + k * a_strides[2]
+                    b_pos = b_base + k * b_strides[1]
+                    acc += a_storage[a_pos] * b_storage[b_pos]
 
-
-    Args:
-    ----
-        out (Storage): storage for `out` tensor
-        out_shape (Shape): shape for `out` tensor
-        out_strides (Strides): strides for `out` tensor
-        a_storage (Storage): storage for `a` tensor
-        a_shape (Shape): shape for `a` tensor
-        a_strides (Strides): strides for `a` tensor
-        b_storage (Storage): storage for `b` tensor
-        b_shape (Shape): shape for `b` tensor
-        b_strides (Strides): strides for `b` tensor
-
-    Returns:
-    -------
-        None : Fills in `out`
-
-    """
-    # TODO
-    batch_stride_a = a_strides[0] if a_shape[0] > 1 else 0
-    batch_stride_b = b_strides[0] if b_shape[0] > 1 else 0
-
-    for batch in prange(out_shape[0]):
-        batch_offset_a = batch * batch_stride_a
-        batch_offset_b = batch * batch_stride_b
-
-        for row in prange(out_shape[1]):
-            row_offset_a = batch_offset_a + row * a_strides[1]
-
-            for col in prange(out_shape[2]):
-                col_offset_b = batch_offset_b + col * b_strides[2]
-                result = 0.0
-                pos_a = row_offset_a
-                pos_b = col_offset_b
-
-                for _ in range(a_shape[2]):
-                    result += a_storage[pos_a] * b_storage[pos_b]
-                    pos_a += a_strides[2]
-                    pos_b += b_strides[1]
-
-                out[
-                    batch * out_strides[0] + row * out_strides[1] + col * out_strides[2]
-                ] = result
+                out[out_pos] = acc
 
 
-tensor_matrix_multiply = njit(parallel=True, fastmath=True)(_tensor_matrix_multiply)
+tensor_matrix_multiply = njit(_tensor_matrix_multiply, parallel=True)
+assert tensor_matrix_multiply is not None

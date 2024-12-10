@@ -5,42 +5,38 @@ Be sure you have minitorch installed in you Virtual Env.
 
 import minitorch
 
-
+# Use this function to make a random parameter in
+# your module.
 def RParam(*shape):
     r = 2 * (minitorch.rand(shape) - 0.5)
     return minitorch.Parameter(r)
 
-
 class Network(minitorch.Module):
     def __init__(self, hidden_layers):
+        """Initialize the layers of the network."""
         super().__init__()
-
-        # Submodules
         self.layer1 = Linear(2, hidden_layers)
         self.layer2 = Linear(hidden_layers, hidden_layers)
         self.layer3 = Linear(hidden_layers, 1)
 
     def forward(self, x):
-        # TODO: Implement for Task 2.5.
-        h = self.layer1.forward(x).relu()
-        h = self.layer2.forward(h).relu()
-        return self.layer3.forward(h).sigmoid()
+        """Forward pass of the network."""
+        middle = self.layer1.forward(x).relu()
+        end = self.layer2.forward(middle).relu()
+        return self.layer3.forward(end).sigmoid()
 
 
 class Linear(minitorch.Module):
     def __init__(self, in_size, out_size):
+        """Initialize the weights and biases of the layer."""
         super().__init__()
-        self.weights = RParam(in_size, out_size)
-        self.bias = RParam(out_size)
-        self.out_size = out_size
+        self.weights = self.add_parameter("weights", RParam(out_size, in_size, 1).value)
+        self.bias = self.add_parameter("bias", RParam(out_size).value)
 
-    def forward(self, x):
-        # TODO: Implement for Task 2.5.
-        x = x.view(*x.shape, 1)
-        w = self.weights.value.view(1, *self.weights.value.shape)
-        bias = self.bias.value.view(1, self.out_size)
-        return (x * w).sum(1).view(x.shape[0], self.out_size) + bias
-
+    def forward(self, inputs):
+        """Forward pass of the layer."""
+        weighted_inputs = self.weights.value * inputs.permute(1,0)
+        return weighted_inputs.sum(1).view(self.weights.value.shape[0], inputs.shape[0]).permute(1,0) + self.bias.value
 
 def default_log_fn(epoch, total_loss, correct, losses):
     print("Epoch ", epoch, " loss ", total_loss, "correct", correct)
@@ -58,7 +54,6 @@ class TensorTrain:
         return self.model.forward(minitorch.tensor(X))
 
     def train(self, data, learning_rate, max_epochs=500, log_fn=default_log_fn):
-
         self.learning_rate = learning_rate
         self.max_epochs = max_epochs
         self.model = Network(self.hidden_layers)

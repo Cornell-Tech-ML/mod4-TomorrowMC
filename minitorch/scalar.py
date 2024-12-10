@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional, Sequence, Tuple, Type, Union
 
-import numpy as np
+import numpy as np  # type: ignore
 
+from dataclasses import field
 from .autodiff import Context, Variable, backpropagate, central_difference
 from .scalar_functions import (
     EQ,
@@ -47,6 +48,7 @@ class ScalarHistory:
 _var_count = 0
 
 
+@dataclass
 class Scalar:
     """A reimplementation of scalar values for autodifferentiation
     tracking. Scalar Variables behave as close as possible to standard
@@ -55,31 +57,21 @@ class Scalar:
     `ScalarFunction`.
     """
 
-    history: Optional[ScalarHistory]
-    derivative: Optional[float]
     data: float
-    unique_id: int
-    name: str
+    history: Optional[ScalarHistory] = field(default_factory=ScalarHistory)
+    derivative: Optional[float] = None
+    name: str = field(default="")
+    unique_id: int = field(default=0)
 
-    def __init__(
-        self,
-        v: float,
-        back: ScalarHistory = ScalarHistory(),
-        name: Optional[str] = None,
-    ):
+    def __post_init__(self):
         global _var_count
         _var_count += 1
-        self.unique_id = _var_count
-        self.data = float(v)
-        self.history = back
-        self.derivative = None
-        if name is not None:
-            self.name = name
-        else:
-            self.name = str(self.unique_id)
+        object.__setattr__(self, "unique_id", _var_count)
+        object.__setattr__(self, "name", str(self.unique_id))
+        object.__setattr__(self, "data", float(self.data))
 
     def __repr__(self) -> str:
-        return "Scalar(%f)" % self.data
+        return f"Scalar({self.data})"
 
     def __mul__(self, b: ScalarLike) -> Scalar:
         return Mul.apply(self, b)
@@ -90,54 +82,14 @@ class Scalar:
     def __rtruediv__(self, b: ScalarLike) -> Scalar:
         return Mul.apply(b, Inv.apply(self))
 
-    def __add__(self, b: ScalarLike) -> Scalar:
-        # TODO: Implement for Task 1.2.
-        return Add.apply(self, b)
-
     def __bool__(self) -> bool:
         return bool(self.data)
-
-    def __lt__(self, b: ScalarLike) -> Scalar:
-        # TODO: Implement for Task 1.2.
-        return LT.apply(self, b)
-
-    def __gt__(self, b: ScalarLike) -> Scalar:
-        # TODO: Implement for Task 1.2.
-        return LT.apply(b, self)
-
-    def __eq__(self, b: ScalarLike) -> Scalar:  # type: ignore[override]
-        # TODO: Implement for Task 1.2.
-        return EQ.apply(self, b)
-
-    def __sub__(self, b: ScalarLike) -> Scalar:
-        # TODO: Implement for Task 1.2.
-        return Add.apply(self, Neg.apply(b))
-
-    def __neg__(self) -> Scalar:
-        # TODO: Implement for Task 1.2.
-        return Neg.apply(self)
 
     def __radd__(self, b: ScalarLike) -> Scalar:
         return self + b
 
     def __rmul__(self, b: ScalarLike) -> Scalar:
         return self * b
-
-    def log(self) -> Scalar:
-        # TODO: Implement for Task 1.2.
-        return Log.apply(self)
-
-    def exp(self) -> Scalar:
-        # TODO: Implement for Task 1.2.
-        return Exp.apply(self)
-
-    def sigmoid(self) -> Scalar:
-        # TODO: Implement for Task 1.2.
-        return Sigmoid.apply(self)
-
-    def relu(self) -> Scalar:
-        # TODO: Implement for Task 1.2.
-        return ReLU.apply(self)
 
     # Variable elements for backprop
 
@@ -152,30 +104,46 @@ class Scalar:
         """
         assert self.is_leaf(), "Only leaf variables can have derivatives."
         if self.derivative is None:
-            self.derivative = 0.0
-        self.derivative += x
+            self.__setattr__("derivative", 0.0)
+        self.__setattr__("derivative", self.derivative + x)
 
     def is_leaf(self) -> bool:
         """True if this variable created by the user (no `last_fn`)"""
         return self.history is not None and self.history.last_fn is None
 
     def is_constant(self) -> bool:
+        """True if this variable is a constant (no derivative)"""
         return self.history is None
 
     @property
     def parents(self) -> Iterable[Variable]:
+        """Returns the parent variables of the current variable."""
         assert self.history is not None
         return self.history.inputs
 
     def chain_rule(self, d_output: Any) -> Iterable[Tuple[Variable, Any]]:
+        """Compute the chain rule for backpropagation.
+
+        Args:
+        ----
+            d_output: The derivative of the output.
+
+        Returns:
+        -------
+            An iterable of tuples containing the variable and its corresponding derivative.
+
+        """
         h = self.history
         assert h is not None
         assert h.last_fn is not None
         assert h.ctx is not None
 
-        # TODO: Implement for Task 1.3.
-        derivatives = h.last_fn._backward(h.ctx, d_output)
-        return zip(h.inputs, derivatives)
+        local_derivatives = h.last_fn._backward(h.ctx, d_output)
+        return [
+            (input_var, local_deriv)
+            for input_var, local_deriv in zip(h.inputs, local_derivatives)
+            if not input_var.is_constant()
+        ]
 
     def backward(self, d_output: Optional[float] = None) -> None:
         """Calls autodiff to fill in the derivatives for the history of this object.
@@ -190,13 +158,48 @@ class Scalar:
             d_output = 1.0
         backpropagate(self, d_output)
 
+    def __neg__(self) -> Scalar:
+        """Negation function."""
+        return Neg.apply(self)
+
+    def __add__(self, b: ScalarLike) -> Scalar:
+        """Addition function."""
+        return Add.apply(self, b)
+
+    def __sub__(self, b: ScalarLike) -> Scalar:
+        return Add.apply(self, Neg.apply(b))
+
+    def log(self) -> Scalar:
+        """Logarithm function."""
+        return Log.apply(self)
+
+    def exp(self) -> Scalar:
+        """Exponential function."""
+        return Exp.apply(self)
+
+    def sigmoid(self) -> Scalar:
+        """Sigmoid function."""
+        return Sigmoid.apply(self)
+
+    def relu(self) -> Scalar:
+        """ReLU function."""
+        return ReLU.apply(self)
+
+    def __lt__(self, b: ScalarLike) -> Scalar:
+        """Less than function."""
+        return LT.apply(self, b)
+
+    def __eq__(self, b: ScalarLike) -> Scalar:
+        """Equality function."""
+        return EQ.apply(self, b)
+
 
 def derivative_check(f: Any, *scalars: Scalar) -> None:
     """Checks that autodiff works on a python function.
     Asserts False if derivative is incorrect.
 
-    Parameters
-    ----------
+    Args:
+    ----
         f : function from n-scalars to 1-scalar.
         *scalars  : n input scalar values.
 

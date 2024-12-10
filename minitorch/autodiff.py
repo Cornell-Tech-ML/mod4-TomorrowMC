@@ -1,7 +1,8 @@
-from dataclasses import dataclass
-from typing import Any, Iterable, Tuple
+from __future__ import annotations
 
-from typing_extensions import Protocol
+from dataclasses import dataclass
+from typing import Any, Iterable, Tuple, Protocol, List
+
 
 # ## Task 1.1
 # Central Difference calculation
@@ -24,13 +25,16 @@ def central_difference(f: Any, *vals: Any, arg: int = 0, epsilon: float = 1e-6) 
         An approximation of $f'_i(x_0, \ldots, x_{n-1})$
 
     """
-    # TODO: Implement for Task 1.1.
-    x1: Any = [i for i in vals]
-    x1[arg] += epsilon
-    x2: Any = [i for i in vals]
-    x2[arg] -= epsilon
+    x0 = vals[arg]
+    vals1 = list(vals)
 
-    return (f(*x1) - f(*x2)) / (2 * epsilon)
+    vals1[arg] = x0 + epsilon
+    f_plus = f(*vals1)
+
+    vals1[arg] = x0 - epsilon
+    f_minus = f(*vals1)
+
+    return (f_plus - f_minus) / (2 * epsilon)
 
 
 variable_count = 1
@@ -38,24 +42,39 @@ variable_count = 1
 
 class Variable(Protocol):
     def accumulate_derivative(self, x: Any) -> None:
-        pass
+        """Accumulate the derivative value."""
 
     @property
     def unique_id(self) -> int:
-        pass
+        """Returns the unique identifier for the variable."""
+        ...
 
     def is_leaf(self) -> bool:
-        pass
+        """Returns True if the variable is a leaf node."""
+        ...
 
     def is_constant(self) -> bool:
-        pass
+        """Returns True if the variable is a constant."""
+        ...
 
     @property
     def parents(self) -> Iterable["Variable"]:
-        pass
+        """Returns the parent variables of the current variable."""
+        ...
 
-    def chain_rule(self, d_output: Any) -> Iterable[Tuple["Variable", Any]]:
-        pass
+    def chain_rule(self, d_output: Any) -> Iterable[Tuple[Variable, Any]]:
+        """Computes the chain rule for backpropagation.
+
+        Args:
+        ----
+            d_output: The derivative of the output with respect to some variable.
+
+        Returns:
+        -------
+            An iterable of tuples containing parent variables and their corresponding derivatives.
+
+        """
+        ...
 
 
 def topological_sort(variable: Variable) -> Iterable[Variable]:
@@ -70,7 +89,6 @@ def topological_sort(variable: Variable) -> Iterable[Variable]:
         Non-constant Variables in topological order starting from the right.
 
     """
-    # TODO: Implement for Task 1.4.
     order: List[Variable] = []
     seen = set()
 
@@ -89,18 +107,18 @@ def topological_sort(variable: Variable) -> Iterable[Variable]:
 
 
 def backpropagate(variable: Variable, deriv: Any) -> None:
-    """Runs backpropagation on the computation graph in order to
-    compute derivatives for the leave nodes.
+    """Runs backpropagation on the computation graph to compute derivatives for the leaf nodes.
 
     Args:
     ----
-        variable: The right-most variable
-        deriv  : Its derivative that we want to propagate backward to the leaves.
+        variable: The right-most variable.
+        deriv: The derivative we want to propagate backward to the leaves.
 
-    No return. Should write to its results to the derivative values of each leaf through `accumulate_derivative`.
+    Returns:
+    -------
+        None: Updates the derivative values of each leaf through accumulate_derivative`.
 
     """
-    # TODO: Implement for Task 1.4.
     queue = topological_sort(variable)
     derivatives = {}
     derivatives[variable.unique_id] = deriv
@@ -131,4 +149,5 @@ class Context:
 
     @property
     def saved_tensors(self) -> Tuple[Any, ...]:
+        """Returns the saved tensors for backpropagation."""
         return self.saved_values

@@ -1,3 +1,6 @@
+import os.path
+# Set HOME environment variable for Mac
+os.environ['HOME'] = os.path.expanduser('~')
 import random
 
 import embeddings
@@ -34,8 +37,7 @@ class Conv1d(minitorch.Module):
         self.bias = RParam(1, out_channels, 1)
 
     def forward(self, input):
-        # TODO: Implement for Task 4.5.
-        raise NotImplementedError("Need to implement for Task 4.5")
+        return minitorch.conv1d(input, self.weights.value) + self.bias.value
 
 
 class CNNSentimentKim(minitorch.Module):
@@ -60,16 +62,37 @@ class CNNSentimentKim(minitorch.Module):
         dropout=0.25,
     ):
         super().__init__()
-        self.feature_map_size = feature_map_size
-        # TODO: Implement for Task 4.5.
-        raise NotImplementedError("Need to implement for Task 4.5")
+        self.dropout = dropout
+
+        self.conv1 = Conv1d(in_channels=embedding_size, out_channels=feature_map_size, kernel_width=filter_sizes[0])
+        self.conv2 = Conv1d(in_channels=embedding_size, out_channels=feature_map_size, kernel_width=filter_sizes[1])
+        self.conv3 = Conv1d(in_channels=embedding_size, out_channels=feature_map_size, kernel_width=filter_sizes[2])
+
+        self.fc = Linear(feature_map_size, 1)
+
 
     def forward(self, embeddings):
         """
         embeddings tensor: [batch x sentence length x embedding dim]
         """
-        # TODO: Implement for Task 4.5.
-        raise NotImplementedError("Need to implement for Task 4.5")
+
+        transformed_embeddings = embeddings.permute(0, 2, 1)
+
+        # 分别通过三个卷积层并在最后的维度上取最大值，得到三个特征向量
+        feature_map_1 = minitorch.max(self.conv1(transformed_embeddings).relu(), dim=2)
+        feature_map_2 = minitorch.max(self.conv2(transformed_embeddings).relu(), dim=2)
+        feature_map_3 = minitorch.max(self.conv3(transformed_embeddings).relu(), dim=2)
+
+
+        combined_features = feature_map_1 + feature_map_2 + feature_map_3
+
+        hidden_rep = self.fc(combined_features.view(combined_features.shape[0], combined_features.shape[1])).relu()
+
+        dropped = minitorch.dropout(input=hidden_rep, p=self.dropout, ignore=not self.training)
+
+        final_output = dropped.sigmoid().view(transformed_embeddings.shape[0])
+
+        return final_output
 
 
 # Evaluation helper methods

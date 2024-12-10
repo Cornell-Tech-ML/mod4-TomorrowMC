@@ -30,61 +30,36 @@ class Module:
         return list(m.values())
 
     def train(self) -> None:
-        """Set the mode of this module and all descendent modules to `train`."""
-
-        # TODO: Implement for Task 0.4.
-        def set_train_recursive(module: Module) -> None:
-            module.training = True
-            for child in module.modules():
-                set_train_recursive(child)
-
-        set_train_recursive(self)
+        """Set the `training` flag of this and descendent to true."""
+        for module in self.modules():
+            module.train()
+        self.training = True
 
     def eval(self) -> None:
-        """Set the mode of this module and all descendent modules to `eval`."""
-
-        # TODO: Implement for Task 0.4.
-        def set_eval_recursive(module: Module) -> None:
-            module.training = False
-            for child in module.modules():
-                set_eval_recursive(child)
-
-        set_eval_recursive(self)
+        """Set the `training` flag of this and descendent to false."""
+        for module in self.modules():
+            module.eval()
+        self.training = False
 
     def named_parameters(self) -> Sequence[Tuple[str, Parameter]]:
         """Collect all the parameters of this module and its descendents.
-
 
         Returns
         -------
             The name and `Parameter` of each ancestor parameter.
 
         """
-        # TODO: Implement for Task 0.4.
-        params: Dict[str, Parameter] = {}
-
-        def recursive_add_children_params(mod_name: str, module: Module) -> None:
-            keyname = mod_name + "." if mod_name else ""
-
-            for param_name in module._parameters:
-                params[keyname + param_name] = module._parameters[param_name]
-            for module_name in module._modules:
-                recursive_add_children_params(
-                    keyname + module_name, module._modules[module_name]
-                )
-
-        recursive_add_children_params(mod_name="", module=self)
-        params_set: Sequence[Tuple[str, Parameter]] = list(
-            (x, y) for (x, y) in zip(list(params.keys()), list(params.values()))
-        )
-
-        return params_set
+        ret = []
+        for key, val in self.__dict__["_parameters"].items():
+            ret.append((key, val))
+        for key, module in self.__dict__["_modules"].items():
+            for name, val in module.named_parameters():
+                ret.append((key + "." + name, val))
+        return ret
 
     def parameters(self) -> Sequence[Parameter]:
         """Enumerate over all the parameters of this module and its descendents."""
-        # TODO: Implement for Task 0.4.
-        params: Sequence[Parameter] = list(y for (x, y) in self.named_parameters())
-        return params
+        return [val for _, val in self.named_parameters()]
 
     def add_parameter(self, k: str, v: Any) -> Parameter:
         """Manually add a parameter. Useful helper for scalar parameters.
@@ -120,6 +95,7 @@ class Module:
         return None
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Invoke the module as a callable."""
         return self.forward(*args, **kwargs)
 
     def __repr__(self) -> str:
@@ -151,9 +127,9 @@ class Module:
 
 
 class Parameter:
-    """A Parameter is a special container stored in a :class:`Module`.
+    """A Parameter is a special container stored in a `Module`.
 
-    It is designed to hold a :class:`Variable`, but we allow it to hold
+    It is designed to hold a `Variable`, but we allow it to hold
     any value for testing.
     """
 

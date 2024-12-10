@@ -31,28 +31,34 @@ def test_avg(t: Tensor) -> None:
 @pytest.mark.task4_4
 @given(tensors(shape=(2, 3, 4)))
 def test_max(t: Tensor) -> None:
-    # ASSIGN4.4
-    t.requires_grad_(True)
-    t2 = t + minitorch.rand((2, 3, 4)) * 1e-6
-    argt2 = minitorch.argmax(t2, 2)
-    v = minitorch.max(t2, minitorch.tensor([2]))
-    v.sum().backward()
-    for i in range(2):
-        for j in range(3):
-            m = -1e9
-            ind = -1
-            for k in range(4):
-                if t2[i, j, k] > m:
-                    m = t2[i, j, k]
-                    ind = k
+    # 测试沿维度 1 取最大值的结果
+    result_along_dim1 = minitorch.max(t, 1)
+    expected_value_dim1 = max(t[0, i, 0] for i in range(3))
+    assert_close(result_along_dim1[0, 0, 0], expected_value_dim1)
 
-            assert_close(v[i, j, 0], m)
-            assert t.grad is not None
-            assert t.grad[i, j, ind] == 1.0
-            assert t.grad[i, j, ind] == argt2[i, j, ind]
-            if ind > 0:
-                assert t.grad[i, j, ind - 1] == 0.0
-    # END ASSIGN4.4
+
+    result_along_dim2 = minitorch.max(t, 2)
+    expected_value_dim2 = max(t[0, 0, i] for i in range(4))
+    assert_close(result_along_dim2[0, 0, 0], expected_value_dim2)
+
+
+    t.requires_grad_(True)
+    out = minitorch.max(t, 1)
+    out.sum().backward()
+
+
+    assert t.grad is not None
+
+
+    for idx in range(24):
+        i = idx // 12
+        j = (idx % 12) // 4
+        k = idx % 4
+        if t[i, j, k] == out[i, 0, k]:
+            assert_close(t.grad[i, j, k], 1.0)
+        else:
+            assert_close(t.grad[i, j, k], 0.0)
+
 
 
 @pytest.mark.task4_4

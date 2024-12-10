@@ -1,8 +1,11 @@
-from typing import Callable, Optional
+# type: ignore
+# Currently pyright doesn't support numba.cuda
+
+from typing import Callable, Optional, TypeVar, Any
 
 import numba
 from numba import cuda
-
+from numba.cuda import jit as _jit
 from .tensor import Tensor
 from .tensor_data import (
     MAX_DIMS,
@@ -17,13 +20,50 @@ from .tensor_data import (
 )
 from .tensor_ops import MapProto, TensorOps
 
+FakeCUDAKernel = Any
+
 # This code will CUDA compile fast versions your tensor_data functions.
 # If you get an error, read the docs for NUMBA as to what is allowed
 # in these functions.
 
-to_index = cuda.jit(device=True)(to_index)
-index_to_position = cuda.jit(device=True)(index_to_position)
-broadcast_index = cuda.jit(device=True)(broadcast_index)
+Fn = TypeVar("Fn")
+
+
+def device_jit(fn: Fn, **kwargs: Any) -> Fn:
+    """Wrap a function with CUDA device just-in-time compilation.
+
+    Args:
+    ----
+        fn: Function to compile
+        kwargs: Additional arguments to pass to the jit compiler
+
+    Returns:
+    -------
+        CUDA compiled device function
+
+    """
+    return _jit(device=True, **kwargs)(fn)  # type: ignore
+
+
+def jit(fn: Callable[..., Any], **kwargs: Any) -> FakeCUDAKernel:
+    """Wrap a function with CUDA just-in-time compilation.
+
+    Args:
+    ----
+        fn: Function to compile
+        kwargs: Additional arguments to pass to the jit compiler
+
+    Returns:
+    -------
+        CUDA compiled kernel function
+
+    """
+    return _jit(**kwargs)(fn)  # type: ignore
+
+
+to_index = device_jit(to_index)
+index_to_position = device_jit(index_to_position)
+broadcast_index = device_jit(broadcast_index)
 
 THREADS_PER_BLOCK = 32
 
@@ -34,7 +74,8 @@ class CudaOps(TensorOps):
     @staticmethod
     def map(fn: Callable[[float], float]) -> MapProto:
         """See `tensor_ops.py`"""
-        f = tensor_map(cuda.jit(device=True)(fn))
+        cufn: Callable[[float], float] = device_jit(fn)
+        f = tensor_map(cufn)
 
         def ret(a: Tensor, out: Optional[Tensor] = None) -> Tensor:
             if out is None:
@@ -50,7 +91,9 @@ class CudaOps(TensorOps):
 
     @staticmethod
     def zip(fn: Callable[[float, float], float]) -> Callable[[Tensor, Tensor], Tensor]:
-        f = tensor_zip(cuda.jit(device=True)(fn))
+        """See `tensor_ops.py`"""
+        cufn: Callable[[float, float], float] = device_jit(fn)
+        f = tensor_zip(cufn)
 
         def ret(a: Tensor, b: Tensor) -> Tensor:
             c_shape = shape_broadcast(a.shape, b.shape)
@@ -68,7 +111,9 @@ class CudaOps(TensorOps):
     def reduce(
         fn: Callable[[float, float], float], start: float = 0.0
     ) -> Callable[[Tensor, int], Tensor]:
-        f = tensor_reduce(cuda.jit(device=True)(fn))
+        """See `tensor_ops.py`"""
+        cufn: Callable[[float, float], float] = device_jit(fn)
+        f = tensor_reduce(cufn)
 
         def ret(a: Tensor, dim: int) -> Tensor:
             out_shape = list(a.shape)
@@ -87,6 +132,7 @@ class CudaOps(TensorOps):
 
     @staticmethod
     def matrix_multiply(a: Tensor, b: Tensor) -> Tensor:
+        """Batched tensor matrix multiply"""
         # Make these always be a 3 dimensional multiply
         both_2d = 0
         if len(a.shape) == 2:
@@ -151,16 +197,22 @@ def tensor_map(
         in_shape: Shape,
         in_strides: Strides,
     ) -> None:
-        position_out = cuda.local.array(MAX_DIMS, numba.int32)
-        position_in = cuda.local.array(MAX_DIMS, numba.int32)
-        thread_position = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
+        out_index = cuda.local.array(MAX_DIMS, numba.int32)
+        in_index = cuda.local.array(MAX_DIMS, numba.int32)
+        i = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
 
-        if thread_position < out_size:
-            to_index(thread_position, out_shape, position_out)
-            broadcast_index(position_out, out_shape, in_shape, position_in)
-            out_idx = index_to_position(position_out, out_strides)
-            in_idx = index_to_position(position_in, in_strides)
-            out[out_idx] = fn(in_storage[in_idx])
+        if i < out_size:
+            # Convert position i to indices for output
+            to_index(i, out_shape, out_index)
+            # Convert output indices to input indices
+            broadcast_index(out_index, out_shape, in_shape, in_index)
+
+            # Calculate positions in storage
+            out_pos = index_to_position(out_index, out_strides)
+            in_pos = index_to_position(in_index, in_strides)
+
+            # Apply function and store result
+            out[out_pos] = fn(in_storage[in_pos])
 
     return cuda.jit()(_map)
 
@@ -202,22 +254,28 @@ def tensor_zip(
         b_index = cuda.local.array(MAX_DIMS, numba.int32)
         i = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
 
-        # TODO: Implement for Task 3.3.
         if i < out_size:
+            # Convert position i to indices
             to_index(i, out_shape, out_index)
+            # Map output indices to input indices
             broadcast_index(out_index, out_shape, a_shape, a_index)
             broadcast_index(out_index, out_shape, b_shape, b_index)
-            a_data = a_storage[index_to_position(a_index, a_strides)]
-            b_data = b_storage[index_to_position(b_index, b_strides)]
-            out[index_to_position(out_index, out_strides)] = fn(a_data, b_data)
+
+            # Calculate positions in storage
+            out_pos = index_to_position(out_index, out_strides)
+            a_pos = index_to_position(a_index, a_strides)
+            b_pos = index_to_position(b_index, b_strides)
+
+            # Apply function and store result
+            out[out_pos] = fn(a_storage[a_pos], b_storage[b_pos])
 
     return cuda.jit()(_zip)  # type: ignore
 
 
 def _sum_practice(out: Storage, a: Storage, size: int) -> None:
-    """This is a practice sum kernel to prepare for reduce.
+    """Practice sum kernel to prepare for reduce.
 
-    Given an array of length $n$ and out of size $n // \text{blockDIM}$
+    Given an array of length $n$ and out of size $n // text{blockDIM}$
     it should sum up each blockDim values into an out cell.
 
     $[a_1, a_2, ..., a_{100}]$
@@ -236,33 +294,34 @@ def _sum_practice(out: Storage, a: Storage, size: int) -> None:
 
     """
     BLOCK_DIM = 32
-
     cache = cuda.shared.array(BLOCK_DIM, numba.float64)
     i = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
     pos = cuda.threadIdx.x
 
+    # Initialize cache
+    cache[pos] = 0.0
     if i < size:
-        cache[pos] = float(a[i])
-    else:
-        cache[pos] = 0.0
+        cache[pos] = a[i]
     cuda.syncthreads()
 
-    if i < size:
-        stride = 1
-        while stride < BLOCK_DIM:
-            if pos % (stride * 2) == 0:
-                cache[pos] += cache[pos + stride]
-            cuda.syncthreads()
-            stride *= 2
+    # Parallel reduction in shared memory
+    stride = BLOCK_DIM // 2
+    while stride > 0:
+        if pos < stride and i + stride < size:
+            cache[pos] += cache[pos + stride]
+        cuda.syncthreads()
+        stride //= 2
 
-        if pos == 0:
-            out[cuda.blockIdx.x] = cache[0]
+    # Write result to output
+    if pos == 0:
+        out[cuda.blockIdx.x] = cache[0]
 
 
 jit_sum_practice = cuda.jit()(_sum_practice)
 
 
 def sum_practice(a: Tensor) -> TensorData:
+    """Sum practice kernel to prepare for reduce."""
     (size,) = a.shape
     threadsperblock = THREADS_PER_BLOCK
     blockspergrid = (size // THREADS_PER_BLOCK) + 1
@@ -300,40 +359,50 @@ def tensor_reduce(
         reduce_dim: int,
         reduce_value: float,
     ) -> None:
-        # TODO
         BLOCK_DIM = 1024
         cache = cuda.shared.array(BLOCK_DIM, numba.float64)
         out_index = cuda.local.array(MAX_DIMS, numba.int32)
         out_pos = cuda.blockIdx.x
         pos = cuda.threadIdx.x
 
+        # Convert output position to indices
+        to_index(out_pos, out_shape, out_index)
+
+        # Initialize cache
         cache[pos] = reduce_value
 
-        if out_pos < out_size:
-            to_index(out_pos, out_shape, out_index)
-            dim_size = a_shape[reduce_dim]
-            out_index[reduce_dim] = out_index[reduce_dim] * BLOCK_DIM + pos
+        # Calculate number of elements to reduce
+        reduce_size = a_shape[reduce_dim]
 
-            if out_index[reduce_dim] < dim_size:
-                cache[pos] = a_storage[index_to_position(out_index, a_strides)]
-                cuda.syncthreads()
+        # Handle case when pos is in bounds
+        if pos < reduce_size:
+            # Set the dimension to reduce
+            out_index[reduce_dim] = pos
+            # Get position in a
+            a_pos = index_to_position(out_index, a_strides)
+            cache[pos] = a_storage[a_pos]
 
-                power = 0
-                while (1 << power) < BLOCK_DIM:
-                    stride = 1 << power
-                    if pos % (stride * 2) == 0:
-                        cache[pos] = fn(cache[pos], cache[pos + stride])
-                    cuda.syncthreads()
-                    power += 1
+        cuda.syncthreads()
 
-                if pos == 0:
-                    out[index_to_position(out_index, out_strides)] = cache[0]
+        # Parallel reduction in shared memory
+        stride = BLOCK_DIM // 2
+        while stride > 0:
+            if pos < stride and pos + stride < reduce_size:
+                cache[pos] = fn(cache[pos], cache[pos + stride])
+            cuda.syncthreads()
+            stride //= 2
+
+        # Write result
+        if pos == 0:
+            # Get output position
+            out_pos = index_to_position(out_index, out_strides)
+            out[out_pos] = cache[0]
 
     return cuda.jit()(_reduce)
 
 
 def _mm_practice(out: Storage, a: Storage, b: Storage, size: int) -> None:
-    """This is a practice square MM kernel to prepare for matmul.
+    """Practice square MM kernel to prepare for matmul.
 
     Given a storage `out` and two storage `a` and `b`. Where we know
     both are shape [size, size] with strides [size, 1].
@@ -364,32 +433,86 @@ def _mm_practice(out: Storage, a: Storage, b: Storage, size: int) -> None:
 
     """
     BLOCK_DIM = 32
-    # TODO: Implement for Task 3.3.
+
+    # Shared memory for tiles of input matrices
     a_shared = cuda.shared.array((BLOCK_DIM, BLOCK_DIM), numba.float64)
     b_shared = cuda.shared.array((BLOCK_DIM, BLOCK_DIM), numba.float64)
 
-    i = cuda.threadIdx.x
-    j = cuda.threadIdx.y
+    # Thread indices
+    tx = cuda.threadIdx.x
+    ty = cuda.threadIdx.y
 
-    if i >= size or j >= size:
-        return
-    # Moving data to shared memory
-    a_shared[i, j] = a[size * i + j]
-    b_shared[i, j] = b[size * i + j]
-    cuda.syncthreads()
+    # Output indices
+    row = cuda.blockIdx.x * BLOCK_DIM + tx
+    col = cuda.blockIdx.y * BLOCK_DIM + ty
 
-    accum = 0.0
+    # Initialize accumulator
+    temp = 0.0
 
-    for k in range(size):
-        accum += a_shared[i, k] * b_shared[k, j]
+    # Loop over tiles
+    for tile in range((size + BLOCK_DIM - 1) // BLOCK_DIM):
+        # Load data into shared memory
+        x = tile * BLOCK_DIM + tx
+        y = tile * BLOCK_DIM + ty
 
-    out[size * i + j] = accum
+        if row < size and y < size:
+            a_shared[tx, ty] = a[row * size + y]
+        else:
+            a_shared[tx, ty] = 0.0
+
+        if x < size and col < size:
+            b_shared[tx, ty] = b[x * size + col]
+        else:
+            b_shared[tx, ty] = 0.0
+
+        cuda.syncthreads()
+
+        # Compute partial dot product for this tile
+        if row < size and col < size:
+            for k in range(min(BLOCK_DIM, size - tile * BLOCK_DIM)):
+                temp += a_shared[tx, k] * b_shared[k, ty]
+
+        cuda.syncthreads()
+
+    # Write result to global memory
+    if row < size and col < size:
+        out[row * size + col] = temp
 
 
-jit_mm_practice = cuda.jit()(_mm_practice)
+jit_mm_practice = jit(_mm_practice)
 
 
 def mm_practice(a: Tensor, b: Tensor) -> TensorData:
+    """Practice square MM kernel to prepare for matmul.
+
+    Given a storage `out` and two storage `a` and `b`. Where we know
+    both are shape [size, size] with strides [size, 1].
+
+    Size is always < 32.
+
+    Requirements:
+
+    * All data must be first moved to shared memory.
+    * Only read each cell in `a` and `b` once.
+    * Only write to global memory once per kernel.
+
+    Compute
+
+    ```
+     for i:
+         for j:
+              for k:
+                  out[i, j] += a[i, k] * b[k, j]
+    ```
+
+    Args:
+    ----
+        out (Storage): storage for `out` tensor.
+        a (Storage): storage for `a` tensor.
+        b (Storage): storage for `b` tensor.
+        size (int): size of the square
+
+    """
     (size, _) = a.shape
     threadsperblock = (THREADS_PER_BLOCK, THREADS_PER_BLOCK)
     blockspergrid = 1
@@ -442,46 +565,49 @@ def _tensor_matrix_multiply(
     i = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
     j = cuda.blockIdx.y * cuda.blockDim.y + cuda.threadIdx.y
 
-    # The local position in the block.
+    # The local position in the block
     pi = cuda.threadIdx.x
     pj = cuda.threadIdx.y
 
-    # Code Plan:
-    # 1) Move across shared dimension by block dim.
-    #    a) Copy into shared memory for a matrix.
-    #    b) Copy into shared memory for b matrix
-    #    c) Compute the dot produce for position c[i, j]
-    # TODO: Implement for Task 3.4.
+    # Initialize accumulator
+    acc = 0.0
 
-    # Initialize accumulator for dot product
-    accum = 0.0
+    # Loop over blocks in the shared dimension
+    for block in range((a_shape[-1] + BLOCK_DIM - 1) // BLOCK_DIM):
+        # Position in the shared dimension
+        k = block * BLOCK_DIM + pj
 
-    # Loop over blocks in the reduction dimension
-    for idx in range(0, a_shape[2], BLOCK_DIM):
-        # Load tile of A into shared memory
-        k = idx + pj
-        if i < a_shape[1] and k < a_shape[2]:
-            a_shared[pi, pj] = a_storage[
-                a_batch_stride * batch + a_strides[1] * i + a_strides[2] * k
-            ]
+        # Copy data to shared memory for a
+        if i < a_shape[-2] and k < a_shape[-1]:
+            a_idx = batch * a_batch_stride + i * a_strides[-2] + k * a_strides[-1]
+            a_shared[pi, pj] = a_storage[a_idx]
+        else:
+            a_shared[pi, pj] = 0.0
 
-        # Load tile of B into shared memory
-        k = idx + pi
-        if j < b_shape[2] and k < b_shape[1]:
-            b_shared[pi, pj] = b_storage[
-                b_batch_stride * batch + b_strides[2] * j + b_strides[1] * k
-            ]
+        # Copy data to shared memory for b
+        k = block * BLOCK_DIM + pi
+        if k < b_shape[-2] and j < b_shape[-1]:
+            b_idx = batch * b_batch_stride + k * b_strides[-2] + j * b_strides[-1]
+            b_shared[pi, pj] = b_storage[b_idx]
+        else:
+            b_shared[pi, pj] = 0.0
 
-        # Ensure all threads have loaded their data
+        # Wait for all threads to finish copying
         cuda.syncthreads()
 
         # Compute partial dot product for this tile
-        for k in range(min(BLOCK_DIM, a_shape[2] - idx)):
-            accum += a_shared[pi, k] * b_shared[k, pj]
+        if i < out_shape[-2] and j < out_shape[-1]:
+            for k in range(BLOCK_DIM):
+                if block * BLOCK_DIM + k < a_shape[-1]:
+                    acc += a_shared[pi, k] * b_shared[k, pj]
 
-        # Ensure all computations are done before next iteration
+        # Wait for all threads to finish computing
         cuda.syncthreads()
 
-    # Write final result to global memory
-    if i < out_shape[1] and j < out_shape[2]:
-        out[out_strides[0] * batch + out_strides[1] * i + out_strides[2] * j] = accum
+    # Write the result to global memory
+    if i < out_shape[-2] and j < out_shape[-1]:
+        out_idx = batch * out_strides[0] + i * out_strides[-2] + j * out_strides[-1]
+        out[out_idx] = acc
+
+
+tensor_matrix_multiply = jit(_tensor_matrix_multiply)
