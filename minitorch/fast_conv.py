@@ -92,7 +92,7 @@ def _tensor_conv1d(
 
     # TODO: Implement for Task 4.1.
     for i in prange(out_size):
-        out_index = np.zeros(MAX_DIMS, np.int16)
+        out_index = np.zeros(MAX_DIMS, np.int32)
         to_index(i, out_shape, out_index)
         o = index_to_position(out_index, out_strides)
         b, oc, w = out_index[:3]
@@ -232,7 +232,7 @@ def _tensor_conv2d(
     s20, s21, s22, s23 = s2[0], s2[1], s2[2], s2[3]
 
     for i in prange(out_size):
-        out_index = np.zeros(MAX_DIMS, np.int16)
+        out_index = np.zeros(MAX_DIMS, np.int32)
         to_index(i, out_shape, out_index)
         o = index_to_position(out_index, out_strides)
         b, oc, h, w = out_index[:4]
