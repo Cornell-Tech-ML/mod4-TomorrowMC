@@ -22,6 +22,7 @@ Fn = TypeVar("Fn")
 
 
 def njit(fn: Fn, **kwargs: Any) -> Fn:
+    """A wrapper function over _njit to always inline functions."""
     return _njit(inline="always", **kwargs)(fn)  # type: ignore
 
 
@@ -139,6 +140,16 @@ class Conv1dFun(Function):
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+        Compute gradients for input and weight given output gradients.
+
+        Args:
+            ctx (Context): Context with saved input and weight Tensors.
+            grad_output (Tensor): Gradients with respect to the output.
+
+        Returns:
+            (Tensor, Tensor): Gradients with respect to input and weight.
+        """
         input, weight = ctx.saved_values
         batch, in_channels, w = input.shape
         out_channels, in_channels, kw = weight.shape
@@ -285,6 +296,16 @@ class Conv2dFun(Function):
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+        Compute gradients for input and weight given output gradients.
+
+        Args:
+            ctx (Context): Context with saved input and weight Tensors.
+            grad_output (Tensor): Gradients with respect to the output.
+
+        Returns:
+            (Tensor, Tensor): Gradients with respect to input and weight.
+        """
         input, weight = ctx.saved_values
         batch, in_channels, h, w = input.shape
         out_channels, in_channels, kh, kw = weight.shape
